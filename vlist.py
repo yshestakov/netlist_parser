@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # PCAD Netlist converter to Verilog pattern
 # Copyright (c) 2019 1801BM1 <1801bm1@gmail.com>
 #
@@ -15,25 +15,36 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import argparse
-import collections
-import itertools
+# import collections
+# import itertools
 import copy
 import sys
 import re
+import os
+import codecs
 
 netlist = {}
 cmplist = {}
+
 
 class tcmp(object):
     def __init__(self):
         self.pins = {}
         self.attr = {}
         self.name = ""
-    
+
+    def __repr__(self):
+        return "tcmp(name %s)" % self.name
+
+
 class tnet(object):
     def __init__(self):
         self.nodes = {}
         self.name = ""
+
+    def __str__(self):
+        return "tnet(name %s)" % self.name
+
 
 class netlist_state(object):
     STATE_IDLE = 0
@@ -41,8 +52,10 @@ class netlist_state(object):
     STATE_COMP = 2
     STATE_NET = 3
     STATE_NODE = 4
+
     def __init__(self):
         self.s = self.STATE_IDLE
+
 
 valid_token = ["(", ")",
                "asciiHeader",
@@ -56,14 +69,16 @@ valid_token = ["(", ")",
                "node",
                "ACCEL_ASCII"]
 
-valid_comp  = ["compRef",
-               "originalName",
-               "compValue",
-               "patternName"]
+valid_comp = ["compRef",
+              "originalName",
+              "compValue",
+              "patternName"]
+
 
 def sxerr(code, nline, token):
     print("Syntax error [%d] in line %d \"%s\"" % (code, nline, token))
-    exit(-1)
+    sys.exit(os.EX_DATAERR)
+
 
 #
 # Load netlist from file in PCAD 2004 ASCII netlist format
@@ -73,12 +88,12 @@ def read_netlist(f, verb):
     nline = 0		# number of line
     ignor = 0		# amount of tokens to skip
     ncomp = 0		# amount of components processed
-    nnet  = 0		# amount of nets processed
+    nnet = 0		# amount of nets processed
     nskip = 0		# parenthesses level to skip
-    token  = ""         # current token
-    comp = tcmp()       # current component
-    cnet = tnet()	# current component
-    pins = []           # node pin list
+    token = ""      # current token
+    comp = tcmp()   # current component
+    cnet = tnet()   # current component
+    pins = []       # node pin list
 
     print("Loading netlist file: %s" % f.name)
     for line in f:
@@ -101,12 +116,14 @@ def read_netlist(f, verb):
 # Check whether token is supported
 #
             if token.startswith('"') != token.endswith('"'):
-                print("Line %d contains not paired quotes: %s" % (nline, line))
-                exit(-1)
+                print("Line %d contains not paired quotes: %s" %
+                      (nline, line))
+                sys.exit(os.EX_DATAERR)
 
             if not token.startswith('"') and token not in valid_token:
-                print("Line %d contains unrecognized token: %s" % (nline, token))
-                exit(-1)
+                print("Line %d contains unrecognized token: %s" %
+                      (nline, token))
+                sys.exit(os.EX_DATAERR)
 #
 # Skip the specified amount if tokens
 #
@@ -126,9 +143,9 @@ def read_netlist(f, verb):
             if state.s == state.STATE_IDLE:
                 if token == "netlist":
                     if prev == "(":
-                         state.s = state.STATE_NETLIST
-                         ignor = 1
-                         continue
+                        state.s = state.STATE_NETLIST
+                        ignor = 1
+                        continue
                 sxerr(1, nline, token)
 
             if state.s == state.STATE_NETLIST:
@@ -137,13 +154,13 @@ def read_netlist(f, verb):
                     continue
                 if prev == "(":
                     if token == "compInst":
-                         comp = tcmp()
-                         state.s = state.STATE_COMP
-                         continue
+                        comp = tcmp()
+                        state.s = state.STATE_COMP
+                        continue
                     if token == "net":
-                         cnet = tnet()
-                         state.s = state.STATE_NET
-                         continue
+                        cnet = tnet()
+                        state.s = state.STATE_NET
+                        continue
                 sxerr(2, nline, token)
 
             if state.s == state.STATE_COMP:
@@ -154,7 +171,7 @@ def read_netlist(f, verb):
                     continue
 #
 # Adding new component on "compInst" closure
-#                
+#
                 if token == ")":
                     if prev == ")":
                         state.s = state.STATE_NETLIST
@@ -186,7 +203,7 @@ def read_netlist(f, verb):
                     continue
 #
 # Adding new net on "net" closure
-#                
+#
                 if token == ")":
                     if prev == ")":
                         state.s = state.STATE_NETLIST
@@ -204,14 +221,15 @@ def read_netlist(f, verb):
                     continue
 #
 # Open new node list
-#                
+#
                 if token.startswith('"') and prev == "node":
                     state.s = state.STATE_NODE
                     compName = token.strip('"')
                     comp = cmplist.get(compName, None)
-                    if comp == None:
-                        print("Component \"%s\" not found in line %d" % (compName, nline))
-                        exit(-1)
+                    if comp is None:
+                        print("Component \"%s\" not found in line %d" %
+                              (compName, nline))
+                        sys.exit(os.EX_DATAERR)
                     pins = []
                     continue
                 sxerr(11, nline, token)
@@ -225,51 +243,53 @@ def read_netlist(f, verb):
                     continue
 
                 if not token.startswith('"'):
-                   sxerr(11, nline, token)
+                    sxerr(11, nline, token)
                 npin = int(token.strip('"'))
                 pins.append(npin)
                 comp.pins[npin] = cnet.name
                 continue
 
-            printf("Invalid state %d", state.s)
-            exit(-1)
+            print("Invalid state %d" % state.s)
+            sys.exit(os.EX_DATAERR)
 
     if nskip or ignor:
         print("Unexpected end of file (not closed skip)")
-        exit(-1)
+        sys.exit(os.EX_DATAERR)
 
     print("%d lines, %d components, %d nets" % (nline, ncomp, nnet))
     return netlist, cmplist
+
 
 def comp_by_pin(vnet, npin):
     rcmp = None
     for key in vnet.nodes:
         node = vnet.nodes[key]
         if len(node) == 1 and node[0] == npin:
-            if rcmp != None:
+            if rcmp is not None:
                 print("Duplicated component in net", vnet)
-                exit(-1)
+                sys.exit(os.EX_DATAERR)
             rcmp = copy.copy(key)
-    if rcmp != None:
+    if rcmp is not None:
         rcmp = cmplist[rcmp]
     return rcmp
+
 
 def proc_1621(arch, verb):
     vlist = []
     vdict = {}
     vlitc = {}
     for i in range(88):
-        vlink = "VLINK_%02d" %  i
+        vlink = "VLINK_%02d" % i
         vnet = netlist.get(vlink, None)
-        if vnet == None:
+        if vnet is None:
             print("Net %s not found in netlist" % vlink)
-            exit(-1)
+            sys.exit(os.EX_DATAERR)
         if verb:
             print(vnet.name, vnet.nodes)
         vcmp = comp_by_pin(vnet, 1)
-        if vcmp == None:
+        if vcmp is None:
             print("No tranceiving component found in net %s" % vnet.name)
-            exit(-1)
+            sys.exit(os.EX_DATAERR)
         pnet = netlist[vcmp.pins[3]]
         seta = 0
         clra = 0
@@ -286,7 +306,7 @@ def proc_1621(arch, verb):
             continue
         l = ""
         for j in range(11):
-            if seta & (1 << j): 
+            if seta & (1 << j):
                 l = "1" + l
                 continue
             if clra & (1 << j):
@@ -316,44 +336,48 @@ def proc_1621(arch, verb):
     vlist = []
     vdict = {}
     for i in range(100):
-        vlink = "TLINK_%02d" %  i
+        vlink = "TLINK_%02d" % i
         vnet = netlist.get(vlink, None)
-        if vnet == None: 
+        if vnet is None:
             print("Net %s not found in netlist" % vlink)
-            exit(-1)
+            sys.exit(os.EX_DATAERR)
         if verb:
             print(vnet.name, vnet.nodes)
         vcmp = comp_by_pin(vnet, 1)
-        if vcmp == None:
+        if vcmp is None:
             print("No tranceiving component found in net %s" % vnet.name)
-            exit(-1)
-        print(vcmp)
+            sys.exit(os.EX_DATAERR)
+        if verb:
+            print(vcmp)
+
 
 def proc_netlist(arch, verb):
     print("Processing netlist for arch: %s" % arch)
 
-    if arch == "cp1621": 
+    if arch == "cp1621":
         proc_1621(arch, verb)
         return
 
     print("Unsupported arch: %s" % arch)
-    exit(-1)
+    sys.exit(os.EX_DATAERR)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("netfile",
-                        type=argparse.FileType('r'),
+                        # type=argparse.FileType('r'),
                         help="input netlist file in PCAD-2004 ASCII format")
     parser.add_argument("--arch",
                         choices=["cp1611", "cp1621"],
                         help="architecture used to translate the matrix",
-                        default = "cp1621")
+                        default="cp1621")
     parser.add_argument("--verbose",
                         action="store_true",
                         help="architecture used to translate the matrix")
     args = parser.parse_args()
-    read_netlist(args.netfile, args.verbose)
-    proc_netlist(args.arch, args.verbose)
-    
-    args.netfile.close()
-    exit(0)
+
+    with codecs.open(args.netfile, encoding='cp1251',
+                     errors='replace') as f_in:
+        read_netlist(f_in, args.verbose)
+        proc_netlist(args.arch, args.verbose)
+    sys.exit(os.EX_OK)
